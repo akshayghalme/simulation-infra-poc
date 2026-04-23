@@ -152,6 +152,8 @@ resource "aws_instance" "simulation" {
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.simulation.id]
   key_name               = var.key_pair_name
+  monitoring             = true # CKV_AWS_126 — detailed CloudWatch monitoring
+  ebs_optimized          = true # CKV_AWS_135
 
   root_block_device {
     volume_size           = var.root_volume_size_gb
