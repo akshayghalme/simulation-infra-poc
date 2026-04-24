@@ -1,0 +1,110 @@
+# -----------------------------------------------------------------------------
+# Litmus ChaosEngine — Pod-Kill on simulation-api
+# -----------------------------------------------------------------------------
+# Hypothesis:
+#   The simulation-api Deployment can absorb the sudden loss of 1/3 of its
+#   replicas without breaking the steady-state SLO (p99 < 500ms, error-rate
+#   < 1%). Kubernetes should reschedule killed pods within 30 seconds and
+#   the HPA should preserve capacity throughout.
+#
+# Steady state (measured by the httpProbe below):
+#   GET /healthz on the ClusterIP Service returns 200 continuously, polled
+#   every 2s for the full 60s chaos window. One failed probe = experiment
+#   fails, and on-call is paged.
+#
+# Scope:
+#   Assumes Litmus 3.x installed cluster-wide and a Deployment labelled
+#   `app=simulation-api` in namespace `simulation`. This YAML is the
+#   experiment definition only — the ChaosExperiment CR (`pod-delete`) is
+#   expected to be pre-installed from the Litmus hub.
+#
+# How to run:
+#   kubectl apply -f chaos/experiments/pod-kill-simulation-api.yaml
+#   kubectl get chaosresult simulation-api-pod-kill-pod-delete -n simulation -w
+#
+# Reference for the JD:
+#   "Enable system resilience through testing and chaos engineering"
+#   Equivalent AWS-native experiment would use FIS `aws:eks:pod-delete` —
+#   see ADR-001 for why we carry Litmus *and* FIS rather than picking one.
+# -----------------------------------------------------------------------------
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: simulation-api-pod-kill
+  namespace: simulation
+spec:
+  appinfo:
+    appns: simulation
+    applabel: "app=simulation-api"
+    appkind: deployment
+
+  chaosServiceAccount: litmus-admin
+  engineState: active
+  annotationCheck: "false"
+
+  experiments:
+    - name: pod-delete
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "60"
+
+            - name: CHAOS_INTERVAL
+              value: "10"
+
+            # Fraction of matched pods to kill per interval. 33% = ~1 of 3
+            # replicas at a time; enough to exercise failover without risking
+            # a full outage.
+            - name: PODS_AFFECTED_PERC
+              value: "33"
+
+            # graceful (SIGTERM → grace period → SIGKILL); matches production
+            # eviction behaviour. Set to "true" only for node-failure
+            # simulations.
+            - name: FORCE
+              value: "false"
+
+            - name: SEQUENCE
+              value: "parallel"
+
+        probe:
+          # Continuous availability probe — the "steady state" of the
+          # hypothesis. Breaks the experiment if /healthz ever returns
+          # non-200 during the chaos window.
+          - name: api-availability
+            type: httpProbe
+            mode: Continuous
+            runProperties:
+              probeTimeout: 5
+              interval: 2
+              retry: 3
+              probePollingInterval: 2
+              stopOnFailure: true
+            httpProbe/inputs:
+              url: http://simulation-api.simulation.svc.cluster.local:8080/healthz
+              insecureSkipVerify: false
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+
+          # Post-chaos recovery probe — confirms replica count is restored
+          # within 30s of experiment end.
+          - name: replicas-restored
+            type: cmdProbe
+            mode: EOT
+            runProperties:
+              probeTimeout: 30
+              interval: 5
+              retry: 6
+            cmdProbe/inputs:
+              command: >-
+                kubectl -n simulation get deployment simulation-api
+                -o jsonpath='{.status.readyReplicas}'
+              source:
+                image: bitnami/kubectl:latest
+              comparator:
+                type: int
+                criteria: ">="
+                value: "3"
