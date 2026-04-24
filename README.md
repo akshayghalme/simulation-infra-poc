@@ -50,16 +50,22 @@ Cost Guard (runs on schedule via cron)
 ```
 simulation-infra-poc/
 ├── terraform/
-│   ├── backend.tf          # S3 remote state + DynamoDB locking
-│   ├── main.tf             # VPC, Subnet, EC2, EIP, Security Group
-│   └── variables.tf        # Parameterized inputs with sensible defaults
+│   ├── backend.tf                         # S3 remote state + DynamoDB locking
+│   ├── main.tf                            # VPC, Subnet, EC2, EIP, Security Group
+│   └── variables.tf                       # Parameterized inputs with validation blocks
 ├── scripts/
-│   └── cleanup.py          # Boto3 cost-guard: stops idle simulation instances
+│   └── cleanup.py                         # Boto3 cost-guard: stops idle simulation instances
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # Self-service CI/CD with security scanning
+│       └── deploy.yml                     # Self-service CI/CD with security scanning
+├── chaos/
+│   └── experiments/
+│       └── pod-kill-simulation-api.yaml   # Litmus ChaosEngine — pod-kill hypothesis
 ├── docs/
-│   └── interview-pitch.md  # How to present this to an architect
+│   ├── adr/
+│   │   └── 001-eks-vs-ec2-for-simulation.md  # Architecture Decision Record
+│   └── interview-pitch.md                 # Talking points for presenting to an architect
+├── LICENSE
 └── README.md
 ```
 
@@ -77,9 +83,11 @@ simulation-infra-poc/
 ```bash
 cd terraform/
 terraform init
-terraform plan -var="instance_type=t3.medium"
+terraform plan -var="instance_type=t3.micro"   # Free Tier-safe for smoke tests
 terraform apply -auto-approve
 ```
+
+> **Note on instance types.** The approved list (`terraform/variables.tf`) also includes `t3.medium`, `c5.xlarge`, `c5.2xlarge`, `r5.large`, etc. On AWS accounts with a Free Tier service-control policy, the API will reject anything outside Free Tier — `t3.micro` is the safest default for evaluating the pipeline end-to-end.
 
 ### Self-Service Deployment (Recommended)
 
@@ -93,7 +101,7 @@ terraform apply -auto-approve
 Run the cleanup script manually or schedule it via cron / EventBridge:
 
 ```bash
-python scripts/cleanup.py
+python3 scripts/cleanup.py
 ```
 
 Instances tagged `Project: Simulation` running longer than 4 hours are stopped automatically.
@@ -146,10 +154,29 @@ This is a Proof of Concept, not a production deployment. The following are delib
 
 Calling these out is the point. A PoC that doesn't know what's wrong with itself is harder to evolve than one that does. Each row above is a **conscious tradeoff**, not an unknown risk.
 
+## See It In Action
+
+The pipeline has been run end-to-end on a live AWS account (`ap-south-1`). Sample workflow runs:
+
+- ✅ [Apply run — provisioned VPC+EC2+EIP](https://github.com/akshayghalme/simulation-infra-poc/actions/runs/24868721639) (8 resources added, 2m total)
+- ✅ [Destroy run — clean teardown](https://github.com/akshayghalme/simulation-infra-poc/actions/runs/24870019457) (8 resources removed, 2m total)
+- ❌ [Apply blocked by Free-Tier SCP](https://github.com/akshayghalme/simulation-infra-poc/actions/runs/24868604385) — the guardrail caught an unsupported instance type at `terraform apply` time; the fix (adding `t3.micro` to the approved list) shipped in a follow-up commit. Kept in history intentionally.
+
+Cost-guard was verified live by setting `--hours 0` against the running instance; the stop call succeeded and the instance transitioned to `stopped` with EBS preserved.
+
+## Further Reading
+
+- **[`docs/adr/001-eks-vs-ec2-for-simulation.md`](docs/adr/001-eks-vs-ec2-for-simulation.md)** — Architecture Decision Record on running the control plane on EKS and solver compute on EC2/Batch. Covers the *why* behind the split, consequences, and follow-ups.
+- **[`chaos/experiments/pod-kill-simulation-api.yaml`](chaos/experiments/pod-kill-simulation-api.yaml)** — Litmus ChaosEngine for validating that the (future) simulation-api Deployment survives a 33%-replica kill inside its SLO window. Includes an explicit hypothesis, steady-state probes, and a post-chaos recovery assertion.
+- **[`docs/interview-pitch.md`](docs/interview-pitch.md)** — Talking points for presenting this PoC to an architect, organized by theme (developer productivity, reliability and cost, security, scalability vision).
+
 ## Author
+
+**Akshay Ghalme** — AWS DevOps / SRE Engineer.
+Website: [akshayghalme.com](https://akshayghalme.com) • GitHub: [@akshayghalme](https://github.com/akshayghalme)
 
 Built as an SRE/DevOps Proof of Concept demonstrating production-grade infrastructure automation, cost governance, and developer self-service patterns.
 
 ---
 
-*License: MIT*
+*License: [MIT](LICENSE)*
