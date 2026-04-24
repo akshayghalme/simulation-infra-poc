@@ -20,6 +20,7 @@ on:
         type: choice
         default: "t3.medium"
         options:
+          - t3.micro       # Free Tier (smoke tests)
           - t3.medium      # General purpose (dev/test)
           - t3.large       # Light simulations
           - t3.xlarge      # Medium simulations

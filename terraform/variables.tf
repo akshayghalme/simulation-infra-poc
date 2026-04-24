@@ -47,6 +47,7 @@ variable "instance_type" {
 
   validation {
     condition = contains([
+      "t3.micro",    # Free Tier (smoke tests only)
       "t3.medium",
       "t3.large",
       "t3.xlarge",
